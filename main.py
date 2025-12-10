@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 loadPrcFile("config/Config.prc")
 
+
 class SatelliteVisualizer(ShowBase):
 	def __init__(self):
 		ShowBase.__init__(self)
