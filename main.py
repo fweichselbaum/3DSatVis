@@ -128,7 +128,8 @@ class SatelliteVisualizer(ShowBase):
 		points_np = self.render.attachNewNode(node)
 
 		points_np.setLightOff()
-		points_np.setRenderModeThickness(3)
+		points_np.setRenderModeThickness(0.025)
+		points_np.setRenderModePerspective(True)
 		points_np.setColor(1, 1, 1, 1)
 			
 
