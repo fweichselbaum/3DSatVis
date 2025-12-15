@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 from datetime import datetime, timezone
 from direct.showbase.ShowBase import ShowBase
 from panda3d.core import (
@@ -16,14 +18,19 @@ from math import sin, radians, degrees
 import numpy as np
 import logging
 import os
+import sys
 
 
 SCALE = 0.001  # 1 unit = 1000 km
 EARTH_RADIUS = 6371.0
-EARTH_TEXTURE_OFFSET = 160
+EARTH_TEXTURE_OFFSET = 160 # 148 TODO fix with better texture
 
 OMM_FILE = "all.csv"
+if len(sys.argv) > 1:
+    OMM_FILE = sys.argv[1]
 OMM_PATH = os.path.join("res", OMM_FILE)
+
+print(f"Loading omm resource file: {OMM_FILE}")
 
 np.set_printoptions(precision=2)
 logging.basicConfig(level=logging.INFO)
