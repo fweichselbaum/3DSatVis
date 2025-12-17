@@ -15,3 +15,8 @@ A (kinda) real-time satellite orbit visualization using python, panda3d and sgp4
 - [ ] Render orbit path when clicked
 - [ ] Show data about satellites when clicked
 - [ ] Filter satellites by constellation
+
+## Technologies 
+
+X360CE
+VRPN
