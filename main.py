@@ -172,7 +172,7 @@ class SatelliteVisualizer(ShowBase):
         fb_props.setRgbaBits(8, 8, 8, 8)
         fb_props.setDepthBits(24)
         fb_props.setAuxRgba(1)
-        fb_props.setStereo(True)
+        # fb_props.setStereo(True)
 
         win_props = self.win.getProperties()
         
