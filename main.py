@@ -8,6 +8,7 @@ from panda3d.core import (
     Shader,
     DirectionalLight,
     AmbientLight,
+    InputDevice,
     GeomVertexFormat, GeomVertexData, GeomVertexWriter,
     Geom, GeomPoints, GeomNode,
     GraphicsPipe, GraphicsOutput, Texture, FrameBufferProperties,
@@ -69,9 +70,6 @@ class SatelliteVisualizer(ShowBase):
 
         self.setup_shader()
 
-        if ENABLE_SHADER:
-            self.accept("window-event", self.on_window_resize)
-
         self.taskMgr.add(self.render_satellites, "render")
 
 
@@ -119,15 +117,12 @@ class SatelliteVisualizer(ShowBase):
         earth_angle = degrees(self.gstime)
         earth_angle = 0
 
-        obj_shader = Shader.load(Shader.SL_GLSL, "shader/earth.vert", "shader/earth.frag")
-
         self.earth = self.loader.loadModel("models/planet_sphere")
         self.earth_tex = self.loader.loadTexture("textures/earth_1k_tex.jpg")
         self.earth.setTexture(self.earth_tex, 1)
         self.earth.setScale(EARTH_RADIUS * SCALE)
         self.earth.setHpr(EARTH_TEXTURE_OFFSET + earth_angle, 0, 0)
         self.earth.reparentTo(self.render)
-        self.earth.setShader(obj_shader)
 
 
     def load_omm_model(self):
@@ -166,49 +161,13 @@ class SatelliteVisualizer(ShowBase):
             self.points_np.setRenderModePerspective(True)
             self.points_np.setColor(1, 1, 1, 1)
             return
-
-        fb_props = FrameBufferProperties()
-        fb_props.setRgbColor(True)
-        fb_props.setRgbaBits(8, 8, 8, 8)
-        fb_props.setDepthBits(24)
-        fb_props.setAuxRgba(1)
-        # fb_props.setStereo(True)
-
-        win_props = self.win.getProperties()
-        
-        self.mrt_buffer = self.graphicsEngine.makeOutput(
-            self.pipe,
-            "mrt_buffer",
-            -1,
-            fb_props,
-            win_props,
-            GraphicsPipe.BFRefuseWindow,
-            self.win.getGsg(),
-            self.win,
-        )
-
-        self.mrt_buffer.setClearColor((0, 0, 0, 1))
-        self.mrt_buffer.setClearActive(GraphicsOutput.RTPAuxRgba0, True)
-        self.mrt_buffer.setClearValue(GraphicsOutput.RTPAuxRgba0, (0, 0, 0, 0))
-        
-        self.tex_visual = Texture()
-        self.tex_visual.setNumViews(2)
-        self.mrt_buffer.addRenderTexture(self.tex_visual, GraphicsOutput.RTMBindOrCopy, GraphicsOutput.RTPColor)
-        
-        self.tex_id = Texture()
-        self.tex_id.setNumViews(2)
-        self.mrt_buffer.addRenderTexture(self.tex_id, GraphicsOutput.RTMCopyRam, GraphicsOutput.RTPAuxRgba0)
-        
-        self.mrt_cam = self.makeCamera(self.mrt_buffer)
-        self.mrt_cam.node().setLens(self.camLens)
-        self.mrt_cam.reparentTo(self.cam)
         
         shader = Shader.load(Shader.SL_GLSL, VERT_SHADER, FRAG_SHADER)
         attrib = ShaderAttrib.make(shader)
         attrib = attrib.setFlag(ShaderAttrib.F_shader_point_size, True)
 
-        self.points_np.setShader(shader)
         self.points_np.setAttrib(attrib)
+        self.points_np.setShader(shader)
         self.points_np.setShaderInputs(
             point_size=100,
             border_size=0.05,
@@ -217,30 +176,7 @@ class SatelliteVisualizer(ShowBase):
             selected_color=(1,0,1,1),
             selected_id = -1,
         )
-
         self.points_np.setTransparency(TransparencyAttrib.MNone) # TODO test 
-        self.cam.node().setActive(False)
-        
-        self.quad_root = NodePath("quad_root")
-
-        quad_cam = Camera("quad_cam")
-        lens = OrthographicLens()
-        lens.setFilmSize(2, 2)     # Covers -1 to 1
-        lens.setNearFar(-10, 10)
-        quad_cam.setLens(lens)
-        self.quad_cam_np = self.quad_root.attachNewNode(quad_cam)
-
-        dr = self.win.makeDisplayRegion()
-        dr.setSort(-10)
-        dr.setCamera(self.quad_cam_np)
-
-
-        cm = CardMaker("quad")
-        cm.setFrameFullscreenQuad()
-        # self.quad = self.render2d.attachNewNode(cm.generate())
-        self.quad = self.quad_root.attachNewNode(cm.generate())
-        self.quad.setTransparency(True) # TODO test 
-        self.quad.setTexture(self.tex_visual)
 
         self.accept("mouse1", self.pick_vertex)
 
@@ -249,28 +185,11 @@ class SatelliteVisualizer(ShowBase):
         if not self.mouseWatcherNode.hasMouse():
             return
 
-        # Get mouse position in pixels
         mpos = self.mouseWatcherNode.getMouse()
         x = int((mpos.getX() + 1) / 2 * self.win.getXSize())
         y = int((mpos.getY() + 1) / 2 * self.win.getYSize())
         
-        peeker = self.tex_id.peek()
-        if peeker:
-            val = LColor()
-            peeker.fetchPixel(val, x, y, 0) # 0 is left eye
-            r = int(val[0] * 255.0)
-            g = int(val[1] * 255.0)
-            b = int(val[2] * 255.0)
-
-            picked_id = (r) + (g << 8) + (b << 16) - 1
-
-            print(f"Selected id: {picked_id}")
-            if picked_id >= 0 and picked_id < len(self.satellite_infos):
-                print(f"Selected Vertex: {self.satellite_infos[picked_id]['OBJECT_NAME']}")
-                self.selected_satellite = picked_id
-                self.points_np.setShaderInput("selected_id", self.selected_satellite)
-            else:
-                print("No point selected")
+        print(f"x={x} y={y}")
 
 
     def render_satellites(self, task):
@@ -297,23 +216,5 @@ class SatelliteVisualizer(ShowBase):
         self.points_np.force_recompute_bounds()
 
         return task.cont
-
-
-    def on_window_resize(self, win):
-        if not ENABLE_SHADER:
-            return
-
-        props = self.win.getProperties()
-        w = props.getXSize()
-        h = props.getYSize()
-        
-        if w == 0 or h == 0:
-            return
-
-        self.mrt_buffer.setSize(w, h)
-
-        aspect_ratio = float(w) / float(h)
-        self.mrt_cam.node().getLens().setAspectRatio(aspect_ratio)
-
 
 SatelliteVisualizer().run()
