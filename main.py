@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from direct.showbase.ShowBase import ShowBase
+from direct.gui.OnscreenText import OnscreenText
 from panda3d.core import (
     loadPrcFile,
     Vec3,
@@ -14,6 +15,7 @@ from panda3d.core import (
     GraphicsPipe, GraphicsOutput, Texture, FrameBufferProperties,
     ShaderAttrib, LColor, CardMaker,
     TransparencyAttrib, OrthographicLens, Camera, NodePath, LineSegs,
+    TextNode,
     GamepadButton, KeyboardButton
 )
 from sgp4 import omm
@@ -66,19 +68,71 @@ class SatelliteVisualizer(ShowBase):
         self.setup_camera()
         self.setup_light() # TODO fix rotation
         self.setup_earth()
-
-        self.gamepad = None
+        self.setup_ui()
         self.setup_gamepad()
 
         self.load_omm_model()
 
         self.setup_shader()
         self.setup_ray()
+        self.orbit_visual_node = None
         
         self.accept("space", self.process_selection)
         self.accept("gamepad-face_a", self.process_selection)
         self.taskMgr.add(self.process_inputs, "input")
         self.taskMgr.add(self.render_satellites, "render")
+
+
+    def setup_ui(self):
+        self.ui_text = OnscreenText(
+            text="No Satellite Selected",
+            parent=self.a2dTopRight,
+            style=1,
+            fg=(1, 1, 1, 1),
+            pos=(-0.05, -0.1),
+            align=TextNode.ARight,
+            scale=0.06,
+            shadow=(0, 0, 0, 1),
+            mayChange=True
+        )
+
+
+    def update_ui(self):
+        if self.selected_satellite == -1:
+            self.ui_text.setText("No Satellite Selected")
+            return
+
+        sat = self.satellite_orbits[self.selected_satellite]
+        info = self.satellite_infos[self.selected_satellite]
+        
+        # Calculate current state
+        now = datetime.now(timezone.utc)
+        jd, fr = jday_datetime(now)
+        error, pos, vel = sat.sgp4(jd, fr)
+        
+        if error != 0:
+            self.ui_text.setText(f"Error calculating state\nSGP4 Error: {error}")
+            return
+
+        # pos is in km, vel is in km/s
+        pos_km = np.array(pos)
+        vel_km_s = np.array(vel)
+        
+        altitude = np.linalg.norm(pos_km) - EARTH_RADIUS
+        velocity = np.linalg.norm(vel_km_s)
+        
+        name = info.get('OBJECT_NAME', 'Unknown')
+        
+        period_h = 2 * np.pi / sat.no_kozai / 60
+        
+        text = (
+            f"{name}\n"
+            f"Alt: {altitude:.1f} km\n"
+            f"Vel: {velocity:.2f} km/s\n"
+            f"Period: {period_h:.1f} h\n"
+            f"Incl: {np.degrees(sat.inclo):.1f}°"
+        )
+        self.ui_text.setText(text)
 
 
     def init_gmst(self):
@@ -158,6 +212,7 @@ class SatelliteVisualizer(ShowBase):
 
 
     def setup_gamepad(self):
+        self.gamepad = None
         self.accept("connect-device", self.connect_device)
         self.accept("disconnect-device", self.disconnect_device)
         # Check if devices are already available
@@ -246,7 +301,7 @@ class SatelliteVisualizer(ShowBase):
         segs = LineSegs()
         segs.setColor(1, 0, 1, 1)           # purple
         segs.setThickness(3.0)
-        segs.moveTo(0, 0, 0)
+        segs.moveTo(0, 1, 0)
         segs.drawTo(0, 5000, 0)             # long line
 
         ray_geom = NodePath(segs.create())
@@ -256,11 +311,59 @@ class SatelliteVisualizer(ShowBase):
         ray_geom.reparentTo(self.ray_pivot)
 
 
+    def draw_orbit(self, sat_idx):
+        if self.orbit_visual_node:
+            self.orbit_visual_node.removeNode()
+            self.orbit_visual_node = None
+
+        if sat_idx < 0 or sat_idx >= len(self.satellite_orbits):
+            return
+
+        sat = self.satellite_orbits[sat_idx]
+        if sat.no_kozai == 0:
+            return
+
+        # Period in minutes: 2*pi / mean_motion (rad/min)
+        period_mins = 2 * np.pi / sat.no_kozai
+        period_days = period_mins / 1440.0
+        
+        num_points = 250
+        offsets = np.linspace(0, period_days, num_points)
+        
+        now = datetime.now(timezone.utc)
+        jd_start, fr_start = jday_datetime(now)
+        
+        jd_array = np.full(num_points, jd_start)
+        fr_array = fr_start + offsets
+        
+        error, positions, velocities = sat.sgp4_array(np.array(jd_array), np.array(fr_array))
+        
+        positions = (positions * SCALE).astype(np.float32)
+        
+        segs = LineSegs()
+        segs.setColor(0, 1, 0, 1)
+        segs.setThickness(2.0)
+        
+        # Start line
+        segs.moveTo(positions[0][0], positions[0][1], positions[0][2])
+        
+        for i in range(1, num_points):
+            segs.drawTo(positions[i][0], positions[i][1], positions[i][2])
+            
+        self.orbit_visual_node = self.render.attachNewNode(segs.create())
+        self.orbit_visual_node.setLightOff()
+        self.orbit_visual_node.setBin("fixed", 100)
+        self.orbit_visual_node.setDepthTest(True)
+
+
     def process_selection(self):
+        if not hasattr(self, 'scaled_positions'):
+            return
+
         cam_pos = np.array(self.camera.getPos(self.render), dtype=np.float32)
         
         # Get ray direction from the visual ray node
-        quat = self.ray_np.getQuat(self.render)
+        quat = self.ray_pivot.getQuat(self.render)
         fwd = quat.getForward()
         ray_dir = np.array([fwd.x, fwd.y, fwd.z], dtype=np.float32)
 
@@ -287,14 +390,15 @@ class SatelliteVisualizer(ShowBase):
                 candidates_dists[best_local_idx] = np.inf
                 
                 best_local_idx = np.argmin(candidates_dists)
-                print(f"dist {candidates_dists[best_local_idx]}")
                 selected_id = int(candidate_indices[best_local_idx])
 
             self.selected_satellite = selected_id
             self.points_np.setShaderInput("selected_id", self.selected_satellite)
+            self.draw_orbit(self.selected_satellite)
 
 
     def render_satellites(self, task):
+        self.update_ui()
         if task.frame % 2 == 0:
             return task.cont
 
