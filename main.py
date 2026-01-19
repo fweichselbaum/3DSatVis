@@ -21,7 +21,6 @@ from sgp4.propagation import gstime
 
 from sgp4.api import Satrec, SatrecArray
 from sgp4.conveniences import jday_datetime
-from math import sin, radians, degrees
 import numpy as np
 import logging
 import os
@@ -76,7 +75,7 @@ class SatelliteVisualizer(ShowBase):
 
         self.setup_shader()
 
-        self.accept("space", self.process_selection)
+        self.accept("<space>", self.process_selection)
         self.accept("gamepad-face_a", self.process_selection)
         self.taskMgr.add(self.process_inputs, "input")
         self.taskMgr.add(self.render_satellites, "render")
@@ -89,15 +88,39 @@ class SatelliteVisualizer(ShowBase):
 
 
     def setup_camera(self):
-        self.camera.setPos(100,50,50)
-        self.camera.lookAt(0,0,0)
+        # Orbit Camera State
+        self.orbit_distance = 150.0
+        self.orbit_h = 0.0
+        self.orbit_p = 0.0
+        
+        self.update_camera_pos()
+
+
+    def update_camera_pos(self):
+        # Convert Spherical to Cartesian
+        # H (Azimuth), P (Elevation)
+        # In Panda3D: 
+        # X = dist * -sin(H) * cos(P)
+        # Y = dist * cos(H) * cos(P)
+        # Z = dist * sin(P)
+        
+        rad_h = np.radians(self.orbit_h)
+        rad_p = np.radians(self.orbit_p)
+        
+        x = self.orbit_distance * np.sin(rad_h) * np.cos(rad_p)
+        y = -self.orbit_distance * np.cos(rad_h) * np.cos(rad_p)
+        z = self.orbit_distance * np.sin(rad_p)
+        
+        self.camera.setPos(x, y, z)
+        self.camera.lookAt(0, 0, 0)
+
     
 
     def setup_light(self):
         time = datetime.now(timezone.utc)
         day_of_year = time.timetuple().tm_yday
-        sun_declination = 23.44 * sin(radians((360/365)*(day_of_year - 81)))
-        sun_angle = degrees(self.gstime)
+        sun_declination = 23.44 * np.sin(np.radians((360/365)*(day_of_year - 81)))
+        sun_angle = np.degrees(self.gstime)
 
         sun_light = DirectionalLight("sun_light")
         sun_light.setColor(Vec3(1, 1, 0.9))
@@ -123,7 +146,7 @@ class SatelliteVisualizer(ShowBase):
         time = datetime.now(timezone.utc)
         hours = time.hour + time.minute/60 + time.second/3600
         earth_angle = np.fmod(hours * 15.0, 360.0)
-        earth_angle = degrees(self.gstime)
+        earth_angle = np.degrees(self.gstime)
         earth_angle = 0
 
         self.earth = self.loader.loadModel("models/planet_sphere")
@@ -246,61 +269,55 @@ class SatelliteVisualizer(ShowBase):
 
     def process_inputs(self, task):
         dt = self.clock.dt
-        speed = 50.0 * dt
-        rot_speed = 90.0 * dt
+        orbit_speed = 90.0 * dt
+        zoom_speed = 100.0 * dt
         
-        move_x, move_y = 0.0, 0.0
-        rot_h, rot_p = 0.0, 0.0
-        selection_pressed = False
-
+        h_input, p_input = 0.0, 0.0
+        zoom_input = 0.0
+        
         # Gamepad Input
         if self.gamepad:
             g_lx = self.gamepad.findAxis(InputDevice.Axis.left_x).value
             g_ly = self.gamepad.findAxis(InputDevice.Axis.left_y).value
-            g_rx = self.gamepad.findAxis(InputDevice.Axis.right_x).value
-            g_ry = self.gamepad.findAxis(InputDevice.Axis.right_y).value
             
-            if abs(g_lx) > 0.1: move_x += g_lx
-            if abs(g_ly) > 0.1: move_y += g_ly
-            if abs(g_rx) > 0.1: rot_h -= g_rx
-            if abs(g_ry) > 0.1: rot_p += g_ry
+            # Triggers: 0 to 1 range usually
+            l_trig = self.gamepad.findAxis(InputDevice.Axis.left_trigger).value
+            r_trig = self.gamepad.findAxis(InputDevice.Axis.right_trigger).value
             
-            if self.gamepad.findButton(GamepadButton.face_a()).pressed:
-                selection_pressed = True
+            if abs(g_lx) > 0.1: h_input += g_lx 
+            if abs(g_ly) > 0.1: p_input += g_ly
+            
+            if abs(l_trig) > 0.05: zoom_input += l_trig
+            if abs(r_trig) > 0.05: zoom_input -= r_trig
+
 
         # Keyboard Input
         mw = self.mouseWatcherNode
-        if mw.is_button_down(KeyboardButton.ascii_key('w')): move_y += 1.0
-        if mw.is_button_down(KeyboardButton.ascii_key('s')): move_y -= 1.0
-        if mw.is_button_down(KeyboardButton.ascii_key('a')): move_x -= 1.0
-        if mw.is_button_down(KeyboardButton.ascii_key('d')): move_x += 1.0
+        if mw.is_button_down(KeyboardButton.ascii_key('w')): p_input += 1.0
+        if mw.is_button_down(KeyboardButton.ascii_key('s')): p_input -= 1.0
+        if mw.is_button_down(KeyboardButton.ascii_key('d')): h_input += 1.0
+        if mw.is_button_down(KeyboardButton.ascii_key('a')): h_input -= 1.0
         
-        if mw.is_button_down(KeyboardButton.up()):    rot_p += 1.0
-        if mw.is_button_down(KeyboardButton.down()):  rot_p -= 1.0
-        if mw.is_button_down(KeyboardButton.left()):  rot_h += 1.0
-        if mw.is_button_down(KeyboardButton.right()): rot_h -= 1.0
+        if mw.is_button_down(KeyboardButton.ascii_key('q')): zoom_input += 1.0
+        if mw.is_button_down(KeyboardButton.ascii_key('e')): zoom_input -= 1.0
         
-        if mw.is_button_down(KeyboardButton.space()) or mw.is_button_down(KeyboardButton.enter()):
-            selection_pressed = True
         
-        # Clamp combined inputs
-        move_x = max(-1.0, min(1.0, move_x))
-        move_y = max(-1.0, min(1.0, move_y))
-        rot_h = max(-1.0, min(1.0, rot_h))
-        rot_p = max(-1.0, min(1.0, rot_p))
-
-        # Move Camera
-        self.camera.setPos(self.camera, Vec3(move_x * speed, move_y * speed, 0))
+        # Update Orbit State
+        self.orbit_h += h_input * orbit_speed
+        self.orbit_p += p_input * orbit_speed
+        self.orbit_distance += zoom_input * zoom_speed
         
-        # Rotate Camera
-        self.camera.setH(self.camera.getH() + rot_h * rot_speed)
-        self.camera.setP(self.camera.getP() + rot_p * rot_speed)
+        # Clamp
+        self.orbit_p = max(-89.0, min(89.0, self.orbit_p))
+        self.orbit_distance = max(10.0, min(500.0, self.orbit_distance))
+        
+        self.update_camera_pos()
         
         # Update Visual Ray
         self.selection_ray_node.show()
         self.selection_ray_node.setPos(self.camera.getPos(self.render))
         self.selection_ray_node.setQuat(self.camera.getQuat(self.render))
-        self.selection_ray_node.setScale(10.0) 
+        self.selection_ray_node.setScale(self.orbit_distance * 0.9) 
 
         return task.cont
     
