@@ -13,10 +13,12 @@ from panda3d.core import (
     Geom, GeomPoints, GeomNode,
     GraphicsPipe, GraphicsOutput, Texture, FrameBufferProperties,
     ShaderAttrib, LColor, CardMaker,
-    TransparencyAttrib, OrthographicLens, Camera, NodePath
+    TransparencyAttrib, OrthographicLens, Camera, NodePath, LineSegs,
+    GamepadButton, KeyboardButton
 )
 from sgp4 import omm
 from sgp4.propagation import gstime
+
 from sgp4.api import Satrec, SatrecArray
 from sgp4.conveniences import jday_datetime
 from math import sin, radians, degrees
@@ -58,7 +60,7 @@ class SatelliteVisualizer(ShowBase):
     def __init__(self):
         ShowBase.__init__(self)
 
-        # self.disableMouse()
+        self.disableMouse()
         self.setBackgroundColor(Vec3(0,0,0))
 
         self.init_gmst()
@@ -66,10 +68,17 @@ class SatelliteVisualizer(ShowBase):
         self.setup_light() # TODO fix rotation
         self.setup_earth()
 
+        self.gamepad = None
+        self.setup_gamepad()
+        self.setup_selection_ray()
+
         self.load_omm_model()
 
         self.setup_shader()
 
+        self.accept("space", self.process_selection)
+        self.accept("gamepad-face_a", self.process_selection)
+        self.taskMgr.add(self.process_inputs, "input")
         self.taskMgr.add(self.render_satellites, "render")
 
 
@@ -125,8 +134,41 @@ class SatelliteVisualizer(ShowBase):
         self.earth.reparentTo(self.render)
 
 
+    def setup_selection_ray(self):
+        self.selection_ray = LineSegs()
+        self.selection_ray.setThickness(2.0)
+        self.selection_ray.setColor(1, 0, 0, 1) # Red color
+        self.selection_ray.moveTo(0, 0, 0)
+        self.selection_ray.drawTo(0, 100, 0) # Initial direction
+        self.selection_ray_node = self.render.attachNewNode(self.selection_ray.create())
+        self.selection_ray_node.hide()
+
+
+    def setup_gamepad(self):
+        self.accept("connect-device", self.connect_device)
+        self.accept("disconnect-device", self.disconnect_device)
+        # Check if devices are already available
+        gamepads = self.devices.getDevices(InputDevice.DeviceClass.gamepad)
+        if gamepads:
+            self.connect_device(gamepads[0])
+
+
+    def connect_device(self, device):
+        if not self.gamepad and device.device_class == InputDevice.DeviceClass.gamepad:
+            print(f"Gamepad connected: {device.name}")
+            self.gamepad = device
+            self.attachInputDevice(device, prefix="gamepad")
+
+
+    def disconnect_device(self, device):
+        if self.gamepad == device:
+            print(f"Gamepad disconnected: {device.name}")
+            self.detachInputDevice(device)
+            self.gamepad = None
+
+
     def load_omm_model(self):
-        self.selected_satellite = 0
+        self.selected_satellite = -1
         self.satellite_infos: list[dict[str,str]] = []
         self.satellite_orbits: list[Satrec] = []
         with open(OMM_PATH) as f:
@@ -178,19 +220,6 @@ class SatelliteVisualizer(ShowBase):
         )
         self.points_np.setTransparency(TransparencyAttrib.MNone) # TODO test 
 
-        self.accept("mouse1", self.pick_vertex)
-
-
-    def pick_vertex(self):
-        if not self.mouseWatcherNode.hasMouse():
-            return
-
-        mpos = self.mouseWatcherNode.getMouse()
-        x = int((mpos.getX() + 1) / 2 * self.win.getXSize())
-        y = int((mpos.getY() + 1) / 2 * self.win.getYSize())
-        
-        print(f"x={x} y={y}")
-
 
     def render_satellites(self, task):
         if task.frame % 2 == 0:
@@ -199,22 +228,117 @@ class SatelliteVisualizer(ShowBase):
         time = datetime.now(timezone.utc)
         jd, fr = jday_datetime(time)
         orbits = SatrecArray(self.satellite_orbits).sgp4(np.array([jd]), np.array([fr]))
-        _, positions, _ = orbits
+        _, positions, velocities = orbits
 
         vertex_writer = GeomVertexWriter(self.vertex_data, "vertex")
         vertex_writer.setRow(0)
 
-        scaled_positions = (positions * SCALE).astype(np.float32)
-        num_rows = len(scaled_positions)
+        self.scaled_positions = (positions * SCALE).astype(np.float32)
+        num_rows = len(self.scaled_positions)
         self.vertex_data.setNumRows(num_rows)
         array_handle = self.vertex_data.modifyArray(0)
         memory_view = memoryview(array_handle)
         np_buffer = np.frombuffer(memory_view, dtype=np.float32)
-        np_buffer[:] = scaled_positions.flatten()
-
-        self.points_np.node().mark_bounds_stale()
-        self.points_np.force_recompute_bounds()
+        np_buffer[:] = self.scaled_positions.flatten()
 
         return task.cont
+
+
+    def process_inputs(self, task):
+        dt = self.clock.dt
+        speed = 50.0 * dt
+        rot_speed = 90.0 * dt
+        
+        move_x, move_y = 0.0, 0.0
+        rot_h, rot_p = 0.0, 0.0
+        selection_pressed = False
+
+        # Gamepad Input
+        if self.gamepad:
+            g_lx = self.gamepad.findAxis(InputDevice.Axis.left_x).value
+            g_ly = self.gamepad.findAxis(InputDevice.Axis.left_y).value
+            g_rx = self.gamepad.findAxis(InputDevice.Axis.right_x).value
+            g_ry = self.gamepad.findAxis(InputDevice.Axis.right_y).value
+            
+            if abs(g_lx) > 0.1: move_x += g_lx
+            if abs(g_ly) > 0.1: move_y += g_ly
+            if abs(g_rx) > 0.1: rot_h -= g_rx
+            if abs(g_ry) > 0.1: rot_p += g_ry
+            
+            if self.gamepad.findButton(GamepadButton.face_a()).pressed:
+                selection_pressed = True
+
+        # Keyboard Input
+        mw = self.mouseWatcherNode
+        if mw.is_button_down(KeyboardButton.ascii_key('w')): move_y += 1.0
+        if mw.is_button_down(KeyboardButton.ascii_key('s')): move_y -= 1.0
+        if mw.is_button_down(KeyboardButton.ascii_key('a')): move_x -= 1.0
+        if mw.is_button_down(KeyboardButton.ascii_key('d')): move_x += 1.0
+        
+        if mw.is_button_down(KeyboardButton.up()):    rot_p += 1.0
+        if mw.is_button_down(KeyboardButton.down()):  rot_p -= 1.0
+        if mw.is_button_down(KeyboardButton.left()):  rot_h += 1.0
+        if mw.is_button_down(KeyboardButton.right()): rot_h -= 1.0
+        
+        if mw.is_button_down(KeyboardButton.space()) or mw.is_button_down(KeyboardButton.enter()):
+            selection_pressed = True
+        
+        # Clamp combined inputs
+        move_x = max(-1.0, min(1.0, move_x))
+        move_y = max(-1.0, min(1.0, move_y))
+        rot_h = max(-1.0, min(1.0, rot_h))
+        rot_p = max(-1.0, min(1.0, rot_p))
+
+        # Move Camera
+        self.camera.setPos(self.camera, Vec3(move_x * speed, move_y * speed, 0))
+        
+        # Rotate Camera
+        self.camera.setH(self.camera.getH() + rot_h * rot_speed)
+        self.camera.setP(self.camera.getP() + rot_p * rot_speed)
+        
+        # Update Visual Ray
+        self.selection_ray_node.show()
+        self.selection_ray_node.setPos(self.camera.getPos(self.render))
+        self.selection_ray_node.setQuat(self.camera.getQuat(self.render))
+        self.selection_ray_node.setScale(10.0) 
+
+        return task.cont
+    
+
+    def process_selection(self):
+        cam_pos = np.array(self.camera.getPos(self.render), dtype=np.float32)
+        quat = self.camera.getQuat(self.render)
+        fwd = quat.getForward()
+        ray_dir = np.array([fwd.x, fwd.y, fwd.z], dtype=np.float32)
+
+        selected_id = -1
+        vecs = self.scaled_positions.reshape(-1,3) - cam_pos # reshape removes extra array dimension for time
+        dists = np.linalg.norm(vecs, axis=1)
+        dists = np.maximum(dists, 1e-6)
+        
+        dots = np.sum(vecs * ray_dir, axis=1)
+        cos_angles = dots / dists
+        
+        threshold_cos = np.cos(np.radians(2.0))
+        
+        mask = cos_angles > threshold_cos
+        candidate_indices = np.where(mask)[0]
+
+        if len(candidate_indices) > 0:
+            candidates_dists = dists[candidate_indices]
+            
+            best_local_idx = np.argmin(candidates_dists)
+            selected_id = int(candidate_indices[best_local_idx])
+
+            if selected_id == self.selected_satellite and len(candidates_dists) > 1:
+                candidates_dists[best_local_idx] = np.inf
+                
+                best_local_idx = np.argmin(candidates_dists)
+                print(f"dist {candidates_dists[best_local_idx]}")
+                selected_id = int(candidate_indices[best_local_idx])
+
+            self.selected_satellite = selected_id
+            self.points_np.setShaderInput("selected_id", self.selected_satellite)
+
 
 SatelliteVisualizer().run()
