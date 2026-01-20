@@ -6,4 +6,4 @@ gl-version 3 2
 
 #side-by-side-stereo true
 #red-blue-stereo true
-#framebuffer-stereo true
+framebuffer-stereo true

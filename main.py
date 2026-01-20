@@ -396,6 +396,8 @@ class SatelliteVisualizer(ShowBase):
         ray_geom.setTwoSided(True)
         ray_geom.reparentTo(self.ray_pivot)
 
+        self.ray_pivot.hide()
+
 
     def draw_orbit(self, sat_idx):
         if self.orbit_visual_node:
