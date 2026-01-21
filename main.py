@@ -7,6 +7,7 @@ from panda3d.core import (
     WindowProperties,
     loadPrcFile,
     Vec3,
+    LVecBase3,
     Shader,
     DirectionalLight,
     AmbientLight,
@@ -19,6 +20,9 @@ from panda3d.core import (
     TextNode,
     GamepadButton, KeyboardButton
 )
+from direct.task import Task
+from panda3d.vrpn import VrpnClient
+from panda3d.core import Quat, Camera, TrackerNode, ButtonNode, AnalogNode, Transform2SG, loadPrcFileData, PerspectiveLens, LVecBase3, Lens, ColorAttrib
 from sgp4 import omm
 from sgp4.propagation import gstime
 
