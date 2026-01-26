@@ -84,7 +84,6 @@ class SatelliteVisualizer(ShowBase):
         self.setup_light() # TODO fix rotation
         self.setup_earth()
         
-        
         self.setup_vrpn()
         self.setup_stereo()
         
@@ -94,6 +93,8 @@ class SatelliteVisualizer(ShowBase):
         # COVISE-style navigation
         self.transformation_started = False
         self.selection_started = False
+        self.constellation_selection_started = False
+        self.orbit_selection_started = False
         self.reference_pos = LVecBase3(0, 0, 0)
         self.reference_quat = Quat()
 
@@ -145,6 +146,11 @@ class SatelliteVisualizer(ShowBase):
         self.rig = self.render.attachNewNode("rig")
         self.camera.reparentTo(self.rig)
 
+        # Compensate for floor height (VRPN origin is on floor, Panda3D camera is at eye level)
+        self.vrpn_origin = self.render.attachNewNode("vrpn_origin")
+        self.vrpn_origin.setPos(0, 0, -SatelliteVisualizer.HEIGHT_OFFSET)
+        self.vrpn_origin.reparentTo(self.rig)
+
         # VRPN trackers:
         
         # In Panda3D, input is handled via the data graph, a tree that lives separately to the scene graph.
@@ -159,7 +165,7 @@ class SatelliteVisualizer(ShowBase):
         d2s_head = Transform2SG("d2s_head")                                 # create a transform object to transform from DATA graph to SCENE graph (SG)
         self.head_tracker.addChild(d2s_head)                                # add the transform object as a child to the DATA graph node
         d2s_head.setNode(self.head.node())                                  # set the output node to the SCENE graph node
-        self.head.reparentTo(self.rig)
+        self.head.reparentTo(self.vrpn_origin)
 
         # attach left and righ eye trackers (only used for projection matrix calculation)
         self.left = self.head.attachNewNode("left")
@@ -174,7 +180,7 @@ class SatelliteVisualizer(ShowBase):
         d2s_flystick9 = Transform2SG("d2s_flystick9")                       # create a transform object to transform from DATA graph to SCENE graph (SG)
         self.flystick9_tracker.addChild(d2s_flystick9)                      # add the transform object as a child to the DATA graph node
         d2s_flystick9.setNode(self.flystick9.node())                        # set the output node to the SCENE graph node
-        self.flystick9.reparentTo(self.rig)
+        self.flystick9.reparentTo(self.vrpn_origin)
 
         self.flystick9_pointer = self.create_pointer(self.flystick9)
         
@@ -184,16 +190,22 @@ class SatelliteVisualizer(ShowBase):
 
 
     def setup_stereo(self):
-
         # disable default cam
         base.camNode.setActive(False)
         base.cam.node().setActive(False)
 
         # make_display_region automatically returns a StereoDisplayRegion if framebuffer-stereo is set to 1 in config
         # both left and right display region share the default camera initially
+
         self.stereo_display_region = base.win.make_display_region()
-        left_display_region = self.stereo_display_region.getLeftEye()
-        right_display_region = self.stereo_display_region.getRightEye()
+        if self.stereo_display_region.isStereo():
+            print("stereo")
+            left_display_region = self.stereo_display_region.getLeftEye()
+            right_display_region = self.stereo_display_region.getRightEye()
+        else:
+            print("mono")
+            left_display_region = self.stereo_display_region
+            right_display_region = self.stereo_display_region
         
         # create and configure left and right eye camera:
 
@@ -240,7 +252,7 @@ class SatelliteVisualizer(ShowBase):
         ll_r = self.right.getRelativePoint(self.rig, self.screen_ll)
         lr_r = self.right.getRelativePoint(self.rig, self.screen_lr)
 
-        flags = Lens.FC_off_axis
+        flags = (Lens.FC_off_axis + Lens.FC_aspect_ratio)
 
         self.left_cam.node().getLens().setFrustumFromCorners(
             ul_l, ur_l, ll_l, lr_l, flags
@@ -256,7 +268,7 @@ class SatelliteVisualizer(ShowBase):
     def poll_vrpn_server(self, t):
         self.vrpnclient.poll()
         self.head.setQuat(Quat()) # discard tracked orientation (cannot face away from wall)
-        self.head.setPos(self.head, LVecBase3(0, -self.HEIGHT_OFFSET, 0))
+        self.head.getPos()
         return Task.cont
         
     
@@ -268,6 +280,8 @@ class SatelliteVisualizer(ShowBase):
 
         tbtn_pressed = self.buttons.getButtonState(SatelliteVisualizer.TRANSFORMATION_BUTTON_NUMBER)
         btn2_pressed = self.buttons.getButtonState(2)
+        btn3_pressed = self.buttons.getButtonState(3)
+        btn4_pressed = self.buttons.getButtonState(4)
 
         if not self.transformation_started and tbtn_pressed:
             self.transformation_started = True
@@ -276,9 +290,12 @@ class SatelliteVisualizer(ShowBase):
             self.transformation_started = False
             self.reference_pos = LVecBase3(self.flystick9.getPos())
             self.reference_quat = Quat(self.flystick9.getQuat())       
-        
         if not btn2_pressed:
             self.selection_started = False
+        if not btn3_pressed:
+            self.constellation_selection_started = False
+        if not btn4_pressed:
+            self.orbit_selection_started = False
 
         if self.transformation_started:
             dt = globalClock.getDt()
@@ -305,17 +322,12 @@ class SatelliteVisualizer(ShowBase):
             self.rig.setPos(LVecBase3(x,y,z))
             self.rig.lookAt(0,0,0)
 
-            # rotation
-            # q_old_inv = Quat(self.reference_quat)
-            # q_old_inv.invertInPlace()
-            # q_diff = q_old_inv * self.flystick9.getQuat()
-            # h, _, _ = q_diff.getHpr()
-            # q_yaw_only = Quat()
-            # q_yaw_only.setHpr((h * SatelliteVisualizer.TRANSFORMATION_SPEED * dt, 0, 0))
-            # self.rig.setQuat(self.rig.getQuat() * q_yaw_only)
-
         # handle your Flystick button presses here
         # example:
+        if not self.constellation_selection_started and btn3_pressed:
+            self.constellation_selection_started = True
+        if not self.orbit_selection_started and btn3_pressed:
+            self.orbit_selection_started = True
         if not self.selection_started and btn2_pressed: # trigger Flystick 9
             self.selection_started = True
             self.process_selection()
@@ -416,7 +428,6 @@ class SatelliteVisualizer(ShowBase):
         self.rig.lookAt(0, 0, 0)
 
     
-
     def setup_light(self):
         time = datetime.now(timezone.utc)
         day_of_year = time.timetuple().tm_yday
@@ -619,8 +630,6 @@ class SatelliteVisualizer(ShowBase):
     def process_selection(self):
         if not hasattr(self, 'scaled_positions') or len(self.visible_orbits) == 0:
             return
-            
-        print("selection")
 
         cam_pos = np.array(self.flystick9.getPos(self.render), dtype=np.float32)
         
