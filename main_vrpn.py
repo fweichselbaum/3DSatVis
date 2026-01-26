@@ -93,6 +93,7 @@ class SatelliteVisualizer(ShowBase):
 
         # COVISE-style navigation
         self.transformation_started = False
+        self.selection_started = False
         self.reference_pos = LVecBase3(0, 0, 0)
         self.reference_quat = Quat()
 
