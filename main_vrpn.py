@@ -98,7 +98,6 @@ class SatelliteVisualizer(ShowBase):
         self.reference_quat = Quat()
 
 
-
         # Filtering initialization
         self.selected_global_id = -1
         self.filter_orbit = 0 # 0: All, 1: LEO, 2: MEO, 3: GEO
@@ -272,16 +271,13 @@ class SatelliteVisualizer(ShowBase):
         if not self.transformation_started and tbtn_pressed:
             self.transformation_started = True
 
-        if not self.selection_started and btn2_pressed:
-            self.selection_started = True
-
-        if not btn2_pressed:
-            self.selection_started = False
-
         if not tbtn_pressed:
             self.transformation_started = False
             self.reference_pos = LVecBase3(self.flystick9.getPos())
             self.reference_quat = Quat(self.flystick9.getQuat())       
+        
+        if not btn2_pressed:
+            self.selection_started = False
 
         if self.transformation_started:
             dt = globalClock.getDt()
@@ -319,7 +315,8 @@ class SatelliteVisualizer(ShowBase):
 
         # handle your Flystick button presses here
         # example:
-        if self.selection_started: # trigger Flystick 9
+        if not self.selection_started and btn2_pressed: # trigger Flystick 9
+            self.selection_started = True
             self.process_selection()
         return Task.cont
 
